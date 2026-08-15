@@ -1,0 +1,57 @@
+name: CI check
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required files exist
+        run: |
+          for f in index.html professions.js robots.txt sitemap.xml worker.js; do
+            test -f "$f" || { echo "MISSING: $f"; exit 1; }
+          done
+          echo "OK: all required files present"
+
+      - name: index.html sanity
+        run: |
+          grep -q '</html>' index.html || { echo "index.html: no closing </html>"; exit 1; }
+          grep -q 'PROFESSIONS_BY_SECTION' index.html && echo "note: professions embedded" || true
+
+      - name: Validate professions.js syntax
+        run: node --check professions.js
+
+      - name: Validate worker.js syntax
+        run: node --check worker.js
+
+      - name: Validate sitemap.xml and links
+        run: |
+          python - <<'EOF'
+          import xml.etree.ElementTree as ET, os, sys
+          tree = ET.parse('sitemap.xml')
+          ok, bad = True, []
+          for url in tree.getroot().findall('{http://www.sitemaps.org/schemas/sitemap/0.9}url'):
+              loc = url.find('{http://www.sitemaps.org/schemas/sitemap/0.9}loc')
+              if loc is None or not loc.text:
+                  continue
+              p = loc.text.split('edu-programs-shop/', 1)[-1]
+              p = p.split('#')[0]
+              if not p or p.endswith('/'):
+                  p = p + 'index.html'
+              if p and not os.path.exists(p):
+                  bad.append(loc.text)
+                  ok = False
+          if not ok:
+              print('BROKEN sitemap links:')
+              for b in bad:
+                  print('  -', b)
+              sys.exit(1)
+          print(f"OK: sitemap links valid ({len(tree.getroot())} urls)")
+          EOF
